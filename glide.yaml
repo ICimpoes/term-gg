@@ -1,0 +1,3 @@
+package: github.com/iliacimpoes/cmd-g
+import:
+- package: github.com/nsf/termbox-go
