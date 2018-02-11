@@ -1,10 +1,8 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"math/rand"
-	"sync"
 	"time"
 
 	"github.com/nsf/termbox-go"
@@ -26,58 +24,44 @@ type point struct {
 type snake struct {
 	points    []point
 	direction direction
-	sync.Mutex
+	changeDir chan direction
 }
 
-func (s *snake) drawSnake() {
-	s.Lock()
-	defer s.Unlock()
+func (s snake) drawSnake() {
 	for _, p := range s.points {
 		termbox.SetCell(p.x, p.y, '☒', termbox.ColorRed, termbox.ColorDefault)
 	}
 }
 
 var (
-	N  int
-	sx int
-	sy int
+	N    int
+	star point
 )
 
 func (s *snake) move() {
-	s.Lock()
-	defer s.Unlock()
-	first := s.points[0]
+	s.points = append(s.points[0:1], s.points[0:]...)
+	select {
+	case s.direction = <-s.changeDir:
+	default:
+	}
 	switch s.direction {
 	case up:
-		first.y--
+		s.points[0].y--
 	case down:
-		first.y++
+		s.points[0].y++
 	case left:
-		first.x -= 2
+		s.points[0].x -= 2
 	case right:
-		first.x += 2
+		s.points[0].x += 2
 	}
-	if first.x == sx && first.y == sy {
-		s.points = append([]point{first}, s.points...)
-		sx = rand.Int()%N + 2
-		if sx%2 != 0 {
-			sx--
-		}
-		sy = rand.Int()%N + 1
+	if s.points[0] == star {
+		newStar()
 		return
 	}
-	s.shift()
-	s.points[0] = first
-}
-func (s *snake) shift() {
-	l := len(s.points)
-	for i := range s.points[:l-1] {
-		s.points[l-i-1] = s.points[l-i-2]
-	}
+	s.points = s.points[:len(s.points)-1]
 }
 
 func main() {
-
 	err := termbox.Init()
 	if err != nil {
 		panic(err)
@@ -86,72 +70,91 @@ func main() {
 
 	rand.Seed(time.Now().Unix())
 
-	var s = snake{points: []point{{8, 1}, {6, 1}, {4, 1}, {2, 1}, {1, 1}}, direction: right}
-	ch := time.Tick(100 * time.Millisecond)
+	var s = snake{points: []point{{4, 1}, {2, 1}, {1, 1}}, direction: right, changeDir: make(chan direction, 1)}
 
 	_, N = termbox.Size()
-	N = N / 2
-	sx = rand.Int()%N + 2
-	if sx%2 != 0 {
-		sx--
-	}
-	sy = rand.Int()%N + 1
-	go func() {
-		for {
-			<-ch
+	N /= 2
+	newStar()
+	exit := make(chan struct{})
+
+	go sendDirection(exit, s.changeDir)
+
+	for {
+		select {
+		case <-time.After(100 * time.Millisecond):
 			termbox.Clear(termbox.ColorDefault, termbox.ColorDefault)
 			s.drawSnake()
 			drawBoard()
 			drawStar()
+			showScore(len(s.points))
 			termbox.Flush()
 			s.move()
+		case <-exit:
+			fmt.Println("bye bye")
+			return
 		}
-	}()
-
-	for err := s.makeMove(); err == nil; {
-		err = s.makeMove()
 	}
 
-	fmt.Println("\ncongrats!")
+}
+
+func newStar() {
+	rnd := func() int {
+		return int(rand.Int31n(int32(N)-1) + 1)
+	}
+	x := rnd()
+	if x%2 != 0 {
+		x += x % (N - 1)
+	}
+	y := rnd()
+	star = point{x: x, y: y}
 }
 
 func drawStar() {
-	termbox.SetCell(sx, sy, '❉', termbox.ColorRed, termbox.ColorDefault)
-	//termbox.SetCursor(10, 10)
-	//fmt.Println(sx, sy)
+	termbox.SetCell(star.x, star.y, '❉', termbox.ColorGreen, termbox.ColorDefault)
 }
 
 func drawBoard() {
-	termbox.SetCell(0, 0, '┏', termbox.ColorWhite, termbox.ColorBlack)
-	termbox.SetCell(N*2, 0, '┓', termbox.ColorWhite, termbox.ColorBlack)
-	termbox.SetCell(0, N, '┗', termbox.ColorWhite, termbox.ColorBlack)
-	termbox.SetCell(N*2, N, '┛', termbox.ColorWhite, termbox.ColorBlack)
-	for i := 1; i < N; i++ {
-		termbox.SetCell(i*2, 0, '━', termbox.ColorWhite, termbox.ColorBlack)
-		termbox.SetCell(i*2+1, 0, '━', termbox.ColorWhite, termbox.ColorBlack)
-		termbox.SetCell(i*2, N, '━', termbox.ColorWhite, termbox.ColorBlack)
-		termbox.SetCell(i*2+1, N, '━', termbox.ColorWhite, termbox.ColorBlack)
-		termbox.SetCell(0, i, '┃', termbox.ColorWhite, termbox.ColorBlack)
-		termbox.SetCell(N*2, i, '┃', termbox.ColorWhite, termbox.ColorBlack)
+	for i := 0; i < N; i++ {
+		for _, j := range []int{0, N} {
+			termbox.SetCell(i*2, j, '━', termbox.ColorWhite, termbox.ColorDefault)
+			termbox.SetCell(i*2+1, j, '━', termbox.ColorWhite, termbox.ColorDefault)
+			termbox.SetCell(2*j, i, '┃', termbox.ColorWhite, termbox.ColorDefault)
+		}
+	}
+	termbox.SetCell(0, 0, '┏', termbox.ColorWhite, termbox.ColorDefault)
+	termbox.SetCell(N*2, 0, '┓', termbox.ColorWhite, termbox.ColorDefault)
+	termbox.SetCell(0, N, '┗', termbox.ColorWhite, termbox.ColorDefault)
+	termbox.SetCell(N*2, N, '┛', termbox.ColorWhite, termbox.ColorDefault)
+}
+
+func showScore(score int) {
+	for i, r := range fmt.Sprintf("Your score: %d", score) {
+		termbox.SetCell((N/3)+i, N+2, r, termbox.ColorDefault, termbox.ColorDefault)
 	}
 }
 
-func (s *snake) makeMove() error {
-	ev := termbox.PollEvent()
-	if ev.Type != termbox.EventKey {
-		return nil
+func sendDirection(done chan struct{}, ch chan direction) error {
+	for {
+		ev := termbox.PollEvent()
+		if ev.Type != termbox.EventKey {
+			continue
+		}
+		// clear channel buffer
+		for len(ch) > 0 {
+			<-ch
+		}
+
+		switch ev.Key {
+		case termbox.KeyArrowUp:
+			ch <- up
+		case termbox.KeyArrowDown:
+			ch <- down
+		case termbox.KeyArrowLeft:
+			ch <- left
+		case termbox.KeyArrowRight:
+			ch <- right
+		case termbox.KeyEsc:
+			done <- struct{}{}
+		}
 	}
-	switch ev.Key {
-	case termbox.KeyArrowUp:
-		s.direction = up
-	case termbox.KeyArrowDown:
-		s.direction = down
-	case termbox.KeyArrowLeft:
-		s.direction = left
-	case termbox.KeyArrowRight:
-		s.direction = right
-	case termbox.KeyEsc:
-		return errors.New("bye")
-	}
-	return nil
 }
