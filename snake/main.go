@@ -140,8 +140,9 @@ func sendDirection(done chan struct{}, ch chan direction) error {
 			continue
 		}
 		// clear channel buffer
-		for len(ch) > 0 {
-			<-ch
+		select {
+		case <-ch:
+		default:
 		}
 
 		switch ev.Key {
